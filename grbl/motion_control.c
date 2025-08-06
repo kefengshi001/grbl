@@ -90,18 +90,36 @@
     uint8_t invert_feed_rate, uint8_t axis_0, uint8_t axis_1, uint8_t axis_linear, uint8_t is_clockwise_arc)
 #endif
 {
+  // position为圆弧起始点位置
+  // target为圆弧终点位置
+  // offset为圆心相对于起点的偏心量
+  // radius为圆的半径
+  // feed_rate为轴的进给速率
+  // invert_feed_rate，进给速率含义标志位，这里默认为零，表示进给速率的单位是min/mm
+  // axis_0，圆弧所在平面的第一个轴，可以是x/y/z中任意一个
+  // axis_1，圆弧所在平面的第二个轴，可以是x/y/z中任意一个
+  // axis_linear，除了圆弧平面之外的第三个轴，即与圆弧平面垂直的轴
+
+  // 圆弧所在平面圆心坐标
   float center_axis0 = position[axis_0] + offset[axis_0];
   float center_axis1 = position[axis_1] + offset[axis_1];
+
+  // 圆心指向圆弧起点的向量
   float r_axis0 = -offset[axis_0];  // Radius vector from center to current location
   float r_axis1 = -offset[axis_1];
+  // 圆心指向圆弧终点的向量
   float rt_axis0 = target[axis_0] - center_axis0;
   float rt_axis1 = target[axis_1] - center_axis1;
   
+  // 计算 圆心到圆弧起始点向量b 与 圆心到圆弧终点向量c 的夹角的正切值
+  // 根据余弦公式推导出正切公式，套入向量b和向量c的坐标，即可得出tana
   // CCW angle between position and target from circle center. Only one atan2() trig computation required.
   float angular_travel = atan2(r_axis0*rt_axis1-r_axis1*rt_axis0, r_axis0*rt_axis0+r_axis1*rt_axis1);
   if (is_clockwise_arc) { // Correct atan2 output per direction
+    // 如果圆弧顺时针移动，角度应该是负值，如果计算出的角度为正值，需要在计算出的角度基础上减去2*pi
     if (angular_travel >= -ARC_ANGULAR_TRAVEL_EPSILON) { angular_travel -= 2*M_PI; }
   } else {
+    // 如果圆弧逆时针移动，角度应该是正值，如果计算出的角度为负值，需要在计算出的角度基础上加上2*pi
     if (angular_travel <= ARC_ANGULAR_TRAVEL_EPSILON) { angular_travel += 2*M_PI; }
   }
 
@@ -109,6 +127,14 @@
   // (2x) settings.arc_tolerance. For 99% of users, this is just fine. If a different arc segment fit
   // is desired, i.e. least-squares, midpoint on arc, just change the mm_per_arc_segment calculation.
   // For the intended uses of Grbl, this value shouldn't exceed 2000 for the strictest of cases.
+  
+  // 计算圆弧的分段数
+  // 计算起点到终点的圆弧可以划分多少条小线段，计算方法：总共的弧长/每条小线段的长度，
+  // angular_travel是圆弧的弧度，radius是圆弧的半径，那么它们的乘积angular_travel*radius就是圆弧的弧长，
+  // 再乘以0.5就是弧长的一半。settings.arc_tolerance是圆弧上两点之间连接的小线段到这段圆弧的最大距离，
+  // 即圆弧上的小线段到弧顶的最大距离。
+  // 分子为起点到终点的圆弧长度，分母为arc_tolerance对应的弦长k
+  // radius^2 = k^2 + (radius - arc_tolerance) ^ 2
   uint16_t segments = floor(fabs(0.5*angular_travel*radius)/
                           sqrt(settings.arc_tolerance*(2*radius - settings.arc_tolerance)) );
   
@@ -194,6 +220,13 @@
   #ifdef USE_LINE_NUMBERS
     mc_line(target, feed_rate, invert_feed_rate, line_number);
   #else
+  // GRBL中使用了环形队列的方式存储每一条直线段的信息,这个队列的名称是block_buffer[BLOCK_BUFFER_SIZE]，
+  // 这个结构体数组里存放的是线段的初速度、最大初速度限制、最大转角速度限制、正常运行速度、加速度、线段长度信息。
+  // 当G代码解析出一条线段指令或者圆弧拆分出线段后，调用
+  // void mc_line(float *target, float feed_rate, uint8_t invert_feed_rate)函数，把当前线段的信息
+  // 存入block_buffer队列中，然后把当前线段和队列里前一条线段结合在一起，用前瞻算法修正队列里前一条线段的最大
+  // 运行速度，以便保证在前一条线段执行结束时的速度与当前线段的初速度一致。另外，根据两条线段的夹角确定最大转角
+  // 速度，用于修正前一条线段的结束速度和当前线段的初速度不能超过最大转角速度。
     mc_line(target, feed_rate, invert_feed_rate);
   #endif
 }

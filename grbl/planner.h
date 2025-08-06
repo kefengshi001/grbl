@@ -32,27 +32,25 @@
   #endif
 #endif
 
-// This struct stores a linear movement of a g-code block motion with its critical "nominal" values
-// are as specified in the source g-code. 
+// 此结构体存储G代码块运动的线性位移数据，其关键“标称值”严格遵循原始G代码设定
 typedef struct {
-  // Fields used by the bresenham algorithm for tracing the line
-  // NOTE: Used by stepper algorithm to execute the block correctly. Do not alter these values.
-  uint8_t direction_bits;    // The direction bit set for this block (refers to *_DIRECTION_BIT in config.h)
-  uint32_t steps[N_AXIS];    // Step count along each axis
-  uint32_t step_event_count; // The maximum step axis count and number of steps required to complete this block. 
+  // Bresenham算法追踪直线所需的字段（步进电机执行核心）
+  // 注意：步进电机算法依赖以下字段，严禁修改
+  uint8_t direction_bits;    // 运动方向位集（对应config.h中的*_DIRECTION_BIT宏）
+  uint32_t steps[N_AXIS];    // 各轴步进计数
+  uint32_t step_event_count; // 本区块执行所需的最大轴步数（步进事件总数）
 
-  // Fields used by the motion planner to manage acceleration
-  float entry_speed_sqr;         // The current planned entry speed at block junction in (mm/min)^2
-  float max_entry_speed_sqr;     // Maximum allowable entry speed based on the minimum of junction limit and 
-                                 //   neighboring nominal speeds with overrides in (mm/min)^2
-  float max_junction_speed_sqr;  // Junction entry speed limit based on direction vectors in (mm/min)^2
-  float nominal_speed_sqr;       // Axis-limit adjusted nominal speed for this block in (mm/min)^2
-  float acceleration;            // Axis-limit adjusted line acceleration in (mm/min^2)
-  float millimeters;             // The remaining distance for this block to be executed in (mm)
-  // uint8_t max_override;       // Maximum override value based on axis speed limits
+  // 运动规划器管理加速度的字段（速度前瞻控制核心）
+  float entry_speed_sqr;         // 当前规划的交界入口速度（单位：(mm/min)²）
+  float max_entry_speed_sqr;     // 基于交界限速与邻接标称速度计算的最大允许入口速度（单位：(mm/min)²）
+  float max_junction_speed_sqr;  // 基于运动方向向量计算的交界入口限速（单位：(mm/min)²）
+  float nominal_speed_sqr;       // 轴速限制调整后的本区块标称速度（单位：(mm/min)²）
+  float acceleration;            // 轴加速度限制调整后的线性加速度（单位：mm/min²）
+  float millimeters;             // 本区块待执行的剩余位移（单位：mm）
+  // uint8_t max_override;       // 基于轴速限制的最大速度倍率值（可选）
 
   #ifdef USE_LINE_NUMBERS
-    int32_t line_number;
+    int32_t line_number;        // 关联的G代码行号（调试追踪用）
   #endif
 } plan_block_t;
 
