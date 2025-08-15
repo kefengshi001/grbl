@@ -26,10 +26,10 @@
                                  // to be larger than any feasible (mm/min)^2 or mm/sec^2 value.
 
 static plan_block_t block_buffer[BLOCK_BUFFER_SIZE]; // A ring buffer for motion instructions
-static uint8_t block_buffer_tail;                    // Index of the block to process now
-static uint8_t block_buffer_head;                    // Index of the next block to be pushed
-static uint8_t next_buffer_head;                     // Index of the next buffer head
-static uint8_t block_buffer_planned;                 // Index of the optimally planned block
+static uint8_t block_buffer_tail;                    // Index of the block to process now       // 当前被执行的 block
+static uint8_t block_buffer_head;                    // Index of the next block to be pushed    // 下一个待写入的 block（缓冲区末尾）
+static uint8_t next_buffer_head;                     // Index of the next buffer head           // 下一个待写入的 block（缓冲区末尾的下一个位置）
+static uint8_t block_buffer_planned;                 // Index of the optimally planned block    // 最后一个被“规划”过的 block（用于前瞻优化）
 
 // Define planner variables
 typedef struct
@@ -132,9 +132,10 @@ static uint8_t plan_prev_block_index(uint8_t block_index)
 static void planner_recalculate()
 {
   // Initialize block index to the last block in the planner buffer.
+  // 指向最后一个block（buffer_head所处的数据是最后的数据）
   uint8_t block_index = plan_prev_block_index(block_buffer_head);
 
-  // Bail. Can't do anything with one only one plan-able block.
+  // 缓冲区中只有一个 block 未进行过规划，直接返回
   if (block_index == block_buffer_planned)
   {
     return;
@@ -156,7 +157,7 @@ static void planner_recalculate()
     // Check if the first block is the tail. If so, notify stepper to update its current parameters.
     if (block_index == block_buffer_tail)
     {
-      st_update_plan_block_parameters();
+      st_update_plan_block_parameters();  //把
     }
   }
   else
@@ -390,7 +391,7 @@ void plan_buffer_line(float *target, float feed_rate, uint8_t invert_feed_rate)
     {
       unit_vec[idx] *= inverse_millimeters; // 单位向量归一化
       inverse_unit_vec_value = fabs(1.0 / unit_vec[idx]);
-      // 轴速度/加速度约束（确保不超机械极限）
+      // 已知轴的最大速度限制倒推实际进给速度限制
       feed_rate = min(feed_rate, settings.max_rate[idx] * inverse_unit_vec_value);
       block->acceleration = min(block->acceleration, settings.acceleration[idx] * inverse_unit_vec_value);
       // 计算路径转角余弦（点积公式）

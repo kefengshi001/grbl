@@ -41,7 +41,7 @@ typedef struct {
   uint32_t step_event_count; // 本区块执行所需的最大轴步数（步进事件总数）
 
   // 运动规划器管理加速度的字段（速度前瞻控制核心）
-  float entry_speed_sqr;         // 当前规划的交界入口速度（单位：(mm/min)²）
+  float entry_speed_sqr;         // 当前规划的交界入口速度（单位：(mm/min)²）--在planner_recalculate()中计算
   float max_entry_speed_sqr;     // 基于交界限速与邻接标称速度计算的最大允许入口速度（单位：(mm/min)²）
   float max_junction_speed_sqr;  // 基于运动方向向量计算的交界入口限速（单位：(mm/min)²）
   float nominal_speed_sqr;       // 轴速限制调整后的本区块标称速度（单位：(mm/min)²）
