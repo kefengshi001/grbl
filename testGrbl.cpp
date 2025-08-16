@@ -10,9 +10,10 @@ typedef struct
 {
     // Bresenham算法追踪直线所需的字段（步进电机执行核心）
     // 注意：步进电机算法依赖以下字段，严禁修改
-    Direction direction_bits;  // 运动方向位集（对应config.h中的*_DIRECTION_BIT宏）
-    uint32_t steps[N_AXIS];    // 各轴步进计数
-    uint32_t step_event_count; // 本区块执行所需的最大轴步数（步进事件总数）
+    Direction direction_bits; // 运动方向位集（对应config.h中的*_DIRECTION_BIT宏）
+    // uint32_t steps[N_AXIS];    // 各轴步进计数
+    // uint32_t step_event_count; // 本区块执行所需的最大轴步数（步进事件总数）
+    float target_pos[N_AXIS]; // 目标位置（笛卡尔坐标）
 
     // 运动规划器管理加速度的字段（速度前瞻控制核心）
     float entry_speed_sqr;        // 当前规划的交界入口速度（单位：(mm/min)²）
@@ -51,34 +52,32 @@ static uint8_t block_buffer_head;                    // Index of the next block 
 static uint8_t next_buffer_head;                     // Index of the next buffer head           // 下一个待写入的 block（缓冲区末尾的下一个位置）
 static uint8_t block_buffer_planned;                 // Index of the optimally planned block    // 最后一个被“规划”过的 block（用于前瞻优化）
 
-
 uint8_t plan_next_block_index(uint8_t block_index)
 {
-  block_index++;
-  if (block_index == BLOCK_BUFFER_SIZE)
-  {
-    block_index = 0;
-  }
-  return (block_index);
+    block_index++;
+    if (block_index == BLOCK_BUFFER_SIZE)
+    {
+        block_index = 0;
+    }
+    return (block_index);
 }
 
 // Returns the index of the previous block in the ring buffer
 static uint8_t plan_prev_block_index(uint8_t block_index)
 {
-  if (block_index == 0)
-  {
-    block_index = BLOCK_BUFFER_SIZE;
-  }
-  block_index--;
-  return (block_index);
+    if (block_index == 0)
+    {
+        block_index = BLOCK_BUFFER_SIZE;
+    }
+    block_index--;
+    return (block_index);
 }
-
 
 void plan_buffer_line(float *target, float feed_rate)
 {
     plan_block_t *block = &block_buffer[block_buffer_head]; // 获取环形缓冲区头部块
     block->millimeters = 0;                                 // 运动距离清零
-    block->direction_ = 0;                                  // 方向位集清零（每位代表轴运动方向）
+    block->direction_bits = Direction::STOPPED;             // 方向位集清零（每位代表轴运动方向）
     block->acceleration = SOME_LARGE_VALUE;
 
     float unit_vec[N_AXIS], delta_mm; // 单位向量 & 轴位移
@@ -87,6 +86,7 @@ void plan_buffer_line(float *target, float feed_rate)
     // x/y/z轴步进计算与运动方向判定
     for (idx = 0; idx < N_AXIS; idx++)
     {
+        block->target_pos[idx] = target[idx]; // 记录目标位置
         delta_mm = target[idx] - pl.position[idx]; // 计算笛卡尔空间位移
         block->millimeters += delta_mm * delta_mm; // 计算运动距离
         unit_vec[idx] = delta_mm;                  // 暂存轴位移，用于后续计算
@@ -100,21 +100,16 @@ void plan_buffer_line(float *target, float feed_rate)
     block->millimeters = sqrt(block->millimeters); // 实际运动距离=√(ΣΔ²)
 
     // 运动参数校验
-    float inverse_unit_vec_value;
-    float inverse_millimeters = 1.0 / block->millimeters; // 单位向量归一化因子
+    float inverse_millimeters = 1.0 / block->millimeters; // 单位向量归一化因子，用于计算余弦角
     float junction_cos_theta = 0;                         // 路径转角余弦（用于速度平滑）
 
     // 计算路径转角余弦
     for (idx = 0; idx < N_AXIS; idx++)
-    {
+    {   
         if (unit_vec[idx] != 0)
         {
-
             // // 已知轴的最大速度限制倒推实际进给速度限制<暂不考虑>
-            // unit_vec[idx] *= inverse_millimeters; // 单位向量归一化
-            // inverse_unit_vec_value = fabs(1.0 / unit_vec[idx]);
-            // feed_rate = min(feed_rate, settings.max_rate[idx] * inverse_unit_vec_value);
-            // block->acceleration = min(block->acceleration, settings.acceleration[idx] * inverse_unit_vec_value);
+            unit_vec[idx] *= inverse_millimeters; // 单位向量归一化
 
             // 计算路径转角余弦（点积公式）
             junction_cos_theta -= pl.previous_unit_vec[idx] * unit_vec[idx];
@@ -143,7 +138,7 @@ void plan_buffer_line(float *target, float feed_rate)
         }
     }
 
-    //运动块最终处理
+    // 运动块最终处理
     block->nominal_speed_sqr = feed_rate * feed_rate; // 标称速度平方
     // 计算最大入口速度(取转角速度、当前速度和前一个速度的最小值)
     block->max_entry_speed_sqr = min(block->max_junction_speed_sqr,
@@ -152,10 +147,103 @@ void plan_buffer_line(float *target, float feed_rate)
     memcpy(pl.previous_unit_vec, unit_vec, sizeof(unit_vec)); // 保存单位向量
     pl.previous_nominal_speed_sqr = block->nominal_speed_sqr; // 保存标称速度平方
     memcpy(pl.position, target, sizeof(int32_t) * N_AXIS);    // 更新规划器位置
-    
+
     // 更新环形缓冲区头指针
     block_buffer_head = next_buffer_head;
     next_buffer_head = plan_next_block_index(next_buffer_head); // 更新下一个待写入的 block 位置
 
     planner_recalculate(); // 触发全局规划重计算
+}
+
+static void planner_recalculate()
+{
+    uint8_t block_index = plan_prev_block_index(block_buffer_head); // 初始化块索引为缓冲区最后一个块
+
+    // 缓冲区中只有一个 block ，直接返回
+    if (block_index == block_buffer_planned)
+    {
+        return;
+    }
+
+    float entry_speed_sqr;
+    plan_block_t *next; // 下一个块指针
+    plan_block_t *current = &block_buffer[block_index];
+
+    // 计算缓冲区最后一个块的最大入口速度，出口速度始终为零
+    current->entry_speed_sqr = min(current->max_entry_speed_sqr, 2 * current->acceleration * current->millimeters);
+
+    // 前向回溯：从缓冲区最后一个块(block_buffer_head)开始向前规划。block_buffer_head->block_buffer_planned
+    // 从后向前，保证每个块都能从让入口速度加/减到出口速度
+    // 把每段入口速度降到“本段里能减到下一段入口”的极限（减速能力）
+    // 可以理解成最后一个块的出口速度为0，一直往前推，得到每一个块的入口速度
+
+    block_index = plan_prev_block_index(block_index);
+    if (block_index == block_buffer_planned)
+    { // 当缓冲区只有两个可规划块时，前向回溯阶段结束
+        if (block_index == block_buffer_tail)
+        {
+            // 如果第一个块是尾部块（也就是说plan和tail重合了），则通知步进器更新其当前参数，保证速度衔接连续
+            st_update_plan_block_parameters(); //
+        }
+    }
+    else
+    { // 三个或更多可规划块
+        while (block_index != block_buffer_planned)
+        {
+            next = current;
+            current = &block_buffer[block_index];
+            block_index = plan_prev_block_index(block_index);
+
+            if (block_index == block_buffer_tail)
+            {
+                st_update_plan_block_parameters();
+            }
+
+            if (current->entry_speed_sqr != current->max_entry_speed_sqr)
+            {
+                // 从出口速度开始计算当前块的最大入口速度，保证当前段有足够的距离将入口速度减到出口速度
+                // 保证减速能力
+                // 取计算得到的入口速度和当前块的最大入口速度的最小值
+                entry_speed_sqr = next->entry_speed_sqr + 2 * current->acceleration * current->millimeters;
+                if (entry_speed_sqr < current->max_entry_speed_sqr)
+                {
+                    current->entry_speed_sqr = entry_speed_sqr;
+                }
+                else
+                {
+                    current->entry_speed_sqr = current->max_entry_speed_sqr;
+                }
+            }
+        }
+    }
+
+    // 后向前瞻：从缓冲区block_buffer_planned->block_buffer_head进行向后规划
+    // 把每段入口速度再收到“前一段里能加到的极限”（加速能力），并标出前缀“已最优”区域。
+    next = &block_buffer[block_buffer_planned];
+    block_index = plan_next_block_index(block_buffer_planned);
+
+    while (block_index != block_buffer_head)
+    {
+        current = next;
+        next = &block_buffer[block_index];
+
+
+        if (current->entry_speed_sqr < next->entry_speed_sqr)
+        {
+            // 保证加速能力
+            entry_speed_sqr = current->entry_speed_sqr + 2 * current->acceleration * current->millimeters;
+            
+            if (entry_speed_sqr < next->entry_speed_sqr)
+            {
+                next->entry_speed_sqr = entry_speed_sqr; 
+                block_buffer_planned = block_index;      
+            }
+        }
+
+        if (next->entry_speed_sqr == next->max_entry_speed_sqr)
+        {
+            block_buffer_planned = block_index;
+        }
+        block_index = plan_next_block_index(block_index);
+    }
 }
